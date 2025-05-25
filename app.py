@@ -5,6 +5,10 @@ import uuid
 
 app = Flask(__name__)
 
+@app.route("/")
+def index():
+    return jsonify({"message": "yt-dlp Flask API is running!"})
+
 @app.route("/download", methods=["POST"])
 def download():
     data = request.get_json()
