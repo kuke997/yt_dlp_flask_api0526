@@ -1,46 +1,73 @@
+from flask import Flask
+import threading
 import os
-import logging
 import requests
-from flask import Flask, request
-from telegram import Update, Bot
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
+import time
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-API_URL = os.getenv("API_URL", "https://yt-dlp-flask-api0526-1.onrender.com/download")
-
+# 创建 Flask 实例
 app = Flask(__name__)
-bot = Bot(token=BOT_TOKEN)
 
-# Handle messages sent to the bot
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = update.message.text.strip()
-    if not url.startswith("http"):
-        await update.message.reply_text("请发送一个有效的 YouTube 链接。")
-        return
+# 读取环境变量
+TOKEN = os.getenv("BOT_TOKEN")
+API_URL = f"https://api.telegram.org/bot{TOKEN}"
+FLASK_API_URL = os.getenv("FLASK_API_URL", "https://yt-dlp-flask-api0526-1.onrender.com/download")
 
+# 获取消息更新
+def get_updates(offset=None):
+    url = f"{API_URL}/getUpdates"
+    params = {"timeout": 100, "offset": offset}
     try:
-        # 调用你的 Flask API
-        response = requests.post(API_URL, json={"url": url})
-        if response.status_code == 200:
-            with open("video.mp4", "wb") as f:
-                f.write(response.content)
-            await update.message.reply_video(video=open("video.mp4", "rb"))
-            os.remove("video.mp4")
-        else:
-            await update.message.reply_text(f"下载失败：{response.text}")
+        response = requests.get(url, params=params, timeout=120)
+        return response.json()
     except Exception as e:
-        await update.message.reply_text(f"出错了：{e}")
+        print(f"Error getting updates: {e}")
+        return {"result": []}
 
-# Telegram Bot 启动
+# 发送消息
+def send_message(chat_id, text):
+    url = f"{API_URL}/sendMessage"
+    data = {"chat_id": chat_id, "text": text}
+    try:
+        requests.post(url, data=data)
+    except Exception as e:
+        print(f"Error sending message: {e}")
+
+# 处理收到的消息
+def handle_message(message):
+    chat_id = message["chat"]["id"]
+    text = message.get("text", "")
+
+    if text.startswith("http"):
+        send_message(chat_id, "🎬 正在下载视频，请稍等...")
+        try:
+            resp = requests.post(FLASK_API_URL, json={"url": text})
+            if resp.status_code == 200:
+                send_message(chat_id, "✅ 视频已准备好（请在浏览器中查看 Render API 结果）")
+            else:
+                send_message(chat_id, f"❌ 下载失败：{resp.text}")
+        except Exception as e:
+            send_message(chat_id, f"❌ 出现错误：{str(e)}")
+    else:
+        send_message(chat_id, "📎 请发送 YouTube 视频链接。")
+
+# 主循环：轮询 Telegram 消息
+def run_bot():
+    print("Bot is running...")
+    offset = None
+    while True:
+        updates = get_updates(offset)
+        for update in updates.get("result", []):
+            offset = update["update_id"] + 1
+            if "message" in update:
+                handle_message(update["message"])
+        time.sleep(1)
+
+# 提供一个 HTTP 路由给 Render 检测端口
 @app.route("/")
 def home():
-    return "Telegram bot is running!"
+    return "✅ Telegram Bot is running."
 
-def start_bot():
-    app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
-    app_bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-    app_bot.run_polling()
-
+# 启动
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    start_bot()
+    threading.Thread(target=run_bot).start()
+    app.run(host="0.0.0.0", port=10000)
